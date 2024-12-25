@@ -227,9 +227,7 @@ def write_types(file: TextIO) -> None:
 
         if len(flags) > 0:
             flags_str = " | ".join([f"kType{f.name}" for f in flags])
-            flags_line = f"    {flags_str})"
-            line_len = len(line) + len(tail)
-            file.write(f"    \\\n{flags_line:{line_len}}")
+            file.write(f" {flags_str})")
         else:
             file.write(tail)
 
