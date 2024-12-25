@@ -13,28 +13,18 @@ from typing import Dict, List, NamedTuple, Set, TextIO, Tuple
 # recommended reading before trying to understand or change anything in here.
 
 
-class Lifetime(Enum):
-    Top = "LifetimeTop"
-    Bottom = "LifetimeBottom"
-    Mortal = "LifetimeMortal"
-    Immortal = "LifetimeImmortal"
-
-
 class UnionSpec(NamedTuple):
     name: str
     components: List[str]
-    lifetime: Lifetime = Lifetime.Bottom
 
 
 class Type(NamedTuple):
     name: str
     bits: int
-    lifetime: Lifetime
 
 
 class TypeFlag(Enum):
     HasUniquePyType = 1 << 0
-    HasTrivialMortality = 1 << 1
 
 
 # First, define all the basic types, which each get 1 bit in the main Type
@@ -121,7 +111,7 @@ BASIC_TYPES: List[str] = BASIC_PYTYPES + BASIC_PRIMITIVE_TYPES
 
 
 # Predefined unions that are exclusively Python types, and will have optional
-# and immortal/mortal variants created.
+# variants created.
 PYTYPE_UNIONS: List[UnionSpec] = [
     UnionSpec("BuiltinExact", BASIC_FINAL_TYPES + BASIC_EXACT_TYPES),
     *[UnionSpec(ty, [ty + "User", ty + "Exact"]) for ty in BASIC_BASE_TYPES],
@@ -131,14 +121,14 @@ PYTYPE_UNIONS: List[UnionSpec] = [
 ]
 
 # Predefined unions that are not exclusively Python types, and have no
-# optional/mortal variants created.
+# optional variant created.
 OTHER_UNIONS: List[UnionSpec] = [
-    UnionSpec("Top", BASIC_TYPES, Lifetime.Top),
-    UnionSpec("Bottom", [], Lifetime.Bottom),
-    UnionSpec("Primitive", BASIC_PRIMITIVE_TYPES, Lifetime.Bottom),
-    UnionSpec("CSigned", BASIC_INT_TYPES, Lifetime.Bottom),
-    UnionSpec("CUnsigned", BASIC_UINT_TYPES, Lifetime.Bottom),
-    UnionSpec("CInt", BASIC_UINT_TYPES + BASIC_INT_TYPES, Lifetime.Bottom),
+    UnionSpec("Top", BASIC_TYPES),
+    UnionSpec("Bottom", []),
+    UnionSpec("Primitive", BASIC_PRIMITIVE_TYPES),
+    UnionSpec("CSigned", BASIC_INT_TYPES),
+    UnionSpec("CUnsigned", BASIC_UINT_TYPES),
+    UnionSpec("CInt", BASIC_UINT_TYPES + BASIC_INT_TYPES),
 ]
 
 
@@ -174,7 +164,7 @@ def assign_bits() -> Tuple[Dict[str, int], int]:
         bits[ty] = 1 << bit_idx
         bit_idx += 1
 
-    for ty, components, _ in PYTYPE_UNIONS + OTHER_UNIONS:
+    for ty, components in PYTYPE_UNIONS + OTHER_UNIONS:
         bits[ty] = reduce(operator.or_, [bits[t] for t in components], 0)
 
     return bits, bit_idx
@@ -188,21 +178,19 @@ def generate_types() -> Tuple[List[Type], int]:
     bits, num_bits = assign_bits()
     nullptr_bit: int = bits["Nullptr"]
 
-    def append_opt(name: str, bits: int, lifetime: Lifetime) -> None:
-        types.append(Type(name, bits, lifetime))
-        types.append(Type("Opt" + name, bits | nullptr_bit, lifetime))
+    def append_opt(name: str, bits: int) -> None:
+        types.append(Type(name, bits))
+        types.append(Type("Opt" + name, bits | nullptr_bit))
 
     for ty in BASIC_PYTYPES + [p[0] for p in PYTYPE_UNIONS]:
         ty_bits = bits[ty]
-        append_opt(ty, ty_bits, Lifetime.Top)
-        append_opt("Mortal" + ty, ty_bits, Lifetime.Mortal)
-        append_opt("Immortal" + ty, ty_bits, Lifetime.Immortal)
+        append_opt(ty, ty_bits)
 
     for ty in BASIC_PRIMITIVE_TYPES:
-        types.append(Type(ty, bits[ty], Lifetime.Bottom))
+        types.append(Type(ty, bits[ty]))
 
-    for ty, _, lifetime in OTHER_UNIONS:
-        types.append(Type(ty, bits[ty], lifetime))
+    for ty, _ in OTHER_UNIONS:
+        types.append(Type(ty, bits[ty]))
 
     return types, num_bits
 
@@ -212,8 +200,7 @@ def write_types(file: TextIO) -> None:
     types.sort(key=lambda t: t[0])
     max_ty_len = 0
     max_bits_len = 0
-    max_lifetime_len = len(Lifetime.Immortal.value) + 2
-    for ty, bits, _ in types:
+    for ty, bits in types:
         # +1 for ','
         max_ty_len = max(max_ty_len, len(ty) + 1)
         # +2 for '0x'
@@ -226,18 +213,15 @@ def write_types(file: TextIO) -> None:
         file.write(f"constexpr size_t kType{name} = {member.value};\n")
     file.write("\n")
 
-    file.write("// For all types, call X(name, bits, mortality, flags)\n")
+    file.write("// For all types, call X(name, bits, flags)\n")
     file.write("#define HIR_TYPES(X)")
-    for ty, bits, lifetime in types:
+    for ty, bits in types:
         flags = []
-        if lifetime == Lifetime.Top or lifetime == Lifetime.Bottom:
-            flags.append(TypeFlag.HasTrivialMortality)
         if ty in BUILTIN_PYTYPES:
             flags.append(TypeFlag.HasUniquePyType)
 
         ty_arg = ty + ","
-        lifetime_arg = f"k{lifetime.value},"
-        line = f"  X({ty_arg:{max_ty_len}} {bits:#0{max_bits_len}x}UL, {lifetime_arg:{max_lifetime_len}}"
+        line = f"  X({ty_arg:{max_ty_len}} {bits:#0{max_bits_len}x}UL,"
         tail = " 0)"
         file.write(f" \\\n{line}")
 
